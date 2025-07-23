@@ -1,61 +1,55 @@
 import os
 import re
 import zipfile
-import pdfplumber
 import streamlit as st
-from PyPDF2 import PdfReader, PdfWriter
+from pdf2image import convert_from_bytes
+from PIL import Image
+import pytesseract
+from PyPDF2 import PdfWriter
 
 def extract_value(text, key):
-    # Try exact match first
     lines = text.splitlines()
     for line in lines:
         if key in line:
-            # Example line: "Credit Note No: 1800000002"
             parts = line.split(key)
             if len(parts) > 1:
                 value = parts[1].strip(": -\n\t")
-                value = value.strip()
-                return value
+                return value.strip()
     return None
 
-
-def split_pdf(file, key):
-    temp_dir = "output_pages"
-    os.makedirs(temp_dir, exist_ok=True)
+def ocr_pdf_and_split(uploaded_file, key):
+    os.makedirs("output_pages", exist_ok=True)
     zip_path = "output.zip"
+    zipf = zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED)
 
-    with open("uploaded.pdf", "wb") as f:
-        f.write(file.read())
+    images = convert_from_bytes(uploaded_file.read(), fmt="jpeg")
 
-    zipf = zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED)
+    for i, image in enumerate(images):
+        text = pytesseract.image_to_string(image)
+        value = extract_value(text, key)
+        if not value:
+            value = f"Unknown_Page_{i+1}"
+        filename = f"{value}.pdf"
+        filepath = os.path.join("output_pages", filename)
 
-    with pdfplumber.open("uploaded.pdf") as pdf:
-        reader = PdfReader("uploaded.pdf")
-        for i, page in enumerate(pdf.pages):
-            text = page.extract_text() or ""
-            value = extract_value(text, key)
-            if not value:
-                value = f"Unknown_Page_{i+1}"
-            filename = f"{value}.pdf"
-            filepath = os.path.join(temp_dir, filename)
-
-            writer = PdfWriter()
-            writer.add_page(reader.pages[i])
-            with open(filepath, "wb") as f_out:
-                writer.write(f_out)
-
-            zipf.write(filepath, arcname=filename)
+        # Save this image as a single-page PDF
+        image.convert("RGB").save(filepath, "PDF")
+        zipf.write(filepath, arcname=filename)
 
     zipf.close()
     return zip_path
 
-# 🎯 Streamlit UI
-st.title("📄 PDF Split & Rename by Key")
-uploaded_file = st.file_uploader("Upload PDF File", type="pdf")
-key = st.text_input("Enter Key (e.g., Credit Note No)")
+# 🖥️ Streamlit UI
+st.set_page_config(page_title="OCR PDF Splitter", layout="centered")
+st.title("📄 PDF Split & Rename by Key (with OCR)")
+
+uploaded_file = st.file_uploader("Upload a scanned PDF", type=["pdf"])
+key = st.text_input("Enter the key to extract value (e.g., Credit Note No)")
 
 if uploaded_file and key:
-    if st.button("Process PDF"):
-        zip_result = split_pdf(uploaded_file, key)
-        with open(zip_result, "rb") as f:
-            st.download_button("📥 Download ZIP", f, file_name="output.zip")
+    if st.button("🔍 Process PDF"):
+        with st.spinner("Processing... Please wait."):
+            result_zip = ocr_pdf_and_split(uploaded_file, key)
+            with open(result_zip, "rb") as f:
+                st.success("✅ Done! Download your ZIP file below.")
+                st.download_button("📥 Download ZIP", f, file_name="output.zip")
